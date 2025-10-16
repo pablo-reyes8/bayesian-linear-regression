@@ -1,4 +1,4 @@
-# Bayesian Salary Regression Pipeline
+# Bayesian Linear Regression 
 
 ![Repo size](https://img.shields.io/github/repo-size/pablo-reyes8/scratch-bayesian-salary-regression)
 ![Last commit](https://img.shields.io/github/last-commit/pablo-reyes8/scratch-bayesian-salary-regression)
