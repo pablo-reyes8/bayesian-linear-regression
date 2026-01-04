@@ -274,7 +274,8 @@ def MCMC_LM_beta_nonconj_sigma_conj_adaptcov_slopes(
         proposal_scale_t = float(np.exp(log_scale))
 
         z = rng.standard_normal(d)
-        bs_prop = bs + proposal_scale_t * (np.sqrt(sigma2) * (L_s @ z))
+        sd_opt = 2.38 / np.sqrt(d)
+        bs_prop = bs + proposal_scale_t * sd_opt * (L_s @ z)
 
         beta_prop = beta.copy()
         beta_prop[slopes_idx] = bs_prop

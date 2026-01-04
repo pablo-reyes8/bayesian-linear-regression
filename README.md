@@ -1,4 +1,4 @@
-# Bayesian Linear Regression 
+# Bayesian Linear Regression
 
 ![Repo size](https://img.shields.io/github/repo-size/pablo-reyes8/scratch-bayesian-salary-regression)
 ![Last commit](https://img.shields.io/github/last-commit/pablo-reyes8/scratch-bayesian-salary-regression)
@@ -6,77 +6,115 @@
 ![Forks](https://img.shields.io/github/forks/pablo-reyes8/scratch-bayesian-salary-regression?style=social)
 ![Stars](https://img.shields.io/github/stars/pablo-reyes8/scratch-bayesian-salary-regression?style=social)
 
-A comprehensive end-to-end implementation of a Bayesian linear regression model to predict individual salaries using conjugate Gaussian–Inverse-Gamma priors, optimized Gibbs sampling, and full posterior diagnostics.
+A full Bayesian linear regression workflow for salary prediction, with conjugate and non-conjugate sampling, diagnostics, and posterior predictive checks. The notebooks show the end to end analysis, while the `src/` modules keep the core sampling and plotting logic reusable.
 
-## 📖 Overview
+## Overview
 
-This project provides a self-contained Jupyter notebook that:
+This project covers:
 
-- Loads and preprocesses salary data with predictors: cost, LSAT, GPA, age, library volume, log(cost), and institutional rank  
-- Specifies weakly-informative priors for regression coefficients and error variance  
-- Implements an optimized Gibbs sampler (Cholesky sampling, pre-inversion of constant matrices)  
-- Runs multiple chains and assesses convergence via trace plots, ACF, Effective Sample Size (ESS), and Gelman–Rubin $\hat R$  
-- Summarizes posterior distributions (means, medians, SDs, 95% HDIs, sign probabilities)  
-- Explores joint parameter dependencies (pairplots, correlation heatmaps)  
-- Performs Posterior Predictive Checks (histogram, KDE, HDI shading)  
-- Demonstrates model refinements (Student-$t$ likelihood, log-transform, mixture models, heteroskedasticity)
+- Data preprocessing and design matrix construction
+- Conjugate Gaussian-Inverse-Gamma regression with optimized Gibbs sampling
+- Non-conjugate priors via Metropolis-Hastings updates
+- Diagnostics: trace plots, ACF, ESS, R-hat, and posterior summaries
+- Posterior predictive checks (PPC) with density, KDE, HDI, and residual diagnostics
+- Log-scale modeling support, including calibrated priors for sigma2
 
-## ✨ Key Features
+## Notebooks
 
-- **Conjugate Bayesian setup**: closed-form updates for $\beta$ and $\sigma^2$  
-- **Optimized Gibbs sampler**: Cholesky draws and precomputed inverses for speed  
-- **Robust diagnostics**: trace, ACF, ESS, $\hat R$ and ArviZ integration  
-- **Rich posterior summaries**: HDIs, posterior $P(\beta>0)$, forest plots  
-- **Flexible PPCs**: histograms, KDE, rug plots, HDI shading  
-- **Extension recipes**: code snippets for Student-$t$ errors, mixtures, transformations  
+- `notebooks/Linear_Regression.ipynb` - baseline conjugate model and full diagnostics
+- `notebooks/model_train_no_conjugate.ipynb` - MH for slopes, conjugate sigma2, and log(y) variants
 
-## 🚀 Quick Start
+## Posterior Predictive Checks (PPC)
 
-1. **Dependencies**  
-   - Python 3.8+  
-   - NumPy, SciPy, Pandas  
-   - Matplotlib, Seaborn  
-   - Statsmodels (for ACF)  
-   - ArviZ (for ESS, $\hat R$)
-  
-2. **Environment Setup**  
-   ```bash
-   pip install numpy scipy pandas matplotlib seaborn statsmodels arviz
-   ```
-3. **Open & Execute**
-   - Navigate to Linear_Regression.ipynb
-   - Run all cells in sequential order to reproduce data loading, model specification, Gibbs sampling, diagnostics, posterior summaries, PPCs, and extensions.
+Utilities live in `src/posterior_predictive_check.py` and now support transformations so the observed data and replicated draws share the same scale.
 
-## 📈 Results & Interpretation
+Example for log(y):
 
-- **Predictor Effects**  
-  - **Strong positive**: Cost, GPA, Library volume (95% HDI excludes zero, P(β>0)>0.99)  
-  - **Strong negative**: Log(cost), Institutional rank (95% HDI excludes zero, P(β>0)<0.01)  
-  - **Ambiguous**: LSAT, Age (HDIs straddle zero, moderate P(β>0))
+```python
+idata_ppc = attach_posterior_predictive_y(idata, X_design, seed=123, var_name="y")
 
-- **Sampling Diagnostics**  
-  - High Effective Sample Size (ESS > 70 000)  
-  - Gelman–Rubin $\hat R = 1.00$  
-  - ACF near zero beyond lag 0 → almost independent draws
+plot_ppc_density_y(
+    idata=idata_ppc,
+    y=y,
+    obs_transform=np.log,
+    var_name="y",
+    fmt_thousands=False,
+)
 
-- **Predictive Fit**  
-  - Posterior Predictive Checks reveal that the Normal-error model underestimates multimodality and heavy tails in the observed salary distribution.  
-  - Model refinements (Student-t errors, mixture components, transformations) are recommended to capture sharp peaks and extreme values.
+plot_ppc_residuals(
+    idata=idata_ppc,
+    X=X_design,
+    y=y,
+    y_transform=np.log,
+    standardize=True,
+    use_posterior_predictive=True,
+)
+```
 
----
+## Log-scale sigma2 calibration
 
-## 🤝 Contributing
+When modeling log(y), the prior for sigma2 must match the log-scale variance. A large `b0` in an Inv-Gamma prior will dominate the posterior and explode the PPC variance.
 
-Contributions and suggestions are welcome! Please:
+Recommended calibration:
 
-- Open an issue to propose enhancements or report bugs  
-- Submit pull requests with clear descriptions of changes  
-- Include unit tests for any new sampler or diagnostic functions
+```python
+y_log = np.log(y)
+s2_emp = y_log.var(ddof=1)
 
----
+a0 = 3.0
+b0 = (a0 - 1) * s2_emp  # prior mean approx s2_emp
 
-## 📜 License
+beta_post, sigma_post, acc, info = MCMC_LM_beta_nonconj_sigma_conj(
+    X_design, y_log,
+    a0=a0, b0=b0,
+    sigma2_init=s2_emp,
+    # ... other settings
+)
+```
 
-Released under the **MIT License**
+## Quick start
 
-   
+```bash
+pip install numpy scipy pandas matplotlib seaborn statsmodels arviz
+```
+
+Run the notebooks in order to reproduce the full analysis.
+
+## Testing
+
+A basic pytest suite is available in `tests/`.
+
+```bash
+pytest -q
+```
+
+## Docker
+
+Build and run a local container:
+
+```bash
+docker build -t bayesian-lr .
+docker run -it --rm -v "$(pwd)":/app bayesian-lr bash
+```
+
+Then run:
+
+```bash
+pytest -q
+```
+
+## Repository layout
+
+- `src/` - samplers, diagnostics, PPC utilities
+- `notebooks/` - analysis notebooks
+- `data/` - raw and processed datasets
+- `experiments/` - ad hoc experiments and extensions
+- `tests/` - pytest coverage for core utilities
+
+## Contributing
+
+Issues and PRs are welcome. If you add new samplers or diagnostics, please include tests.
+
+## License
+
+MIT License
