@@ -75,7 +75,6 @@ def log_prior_beta(beta, prior, prior_kwargs=None, intercept_idx=0):
         raise ValueError(f"Unknown prior='{prior}'. Try: normal, laplace, student_t, cauchy, spike_slab.")
     
 
-# ---------- MCMC: Metropolis-within-Gibbs ----------
 def MCMC_LM_beta_nonconj_sigma_conj(
     X, y,
     a0, b0,
@@ -90,44 +89,41 @@ def MCMC_LM_beta_nonconj_sigma_conj(
     proposal_scale=0.15,
     ridge=1e-8,
     intercept_idx=0,
-    # ---- new user-friendly knobs ----
+
     progress=False,
     progress_every=1000,
     show_time=True,
     return_info=False,
-):
+
+    # Adaptation (burn-in only)
+    adapt=True,
+    target_accept=0.25,
+    adapt_every=200,
+    adapt_start=200,
+    adapt_max_scale=10.0,
+    adapt_min_scale=1e-6,
+    adapt_gain=1.0,):
     """
-    Bayesian linear regression with MH for beta (non-conjugate prior allowed)
-    and Gibbs for sigma2 (conjugate Inv-Gamma).
+    Bayesian linear regression with:
+      - MH for slopes beta[1:] (non-conjugate priors allowed)
+      - Gibbs for intercept beta[0] (exact Normal conditional; flat prior by default)
+      - Gibbs for sigma2 (conjugate Inv-Gamma)
+
+    Assumes:
+      - intercept is beta[0]
+      - X[:,0] is a column of ones
+      - log_prior_beta(beta, prior, prior_kwargs, intercept_idx=0) ignores intercept if intercept_idx=0
 
     Model:
       y | beta, sigma2 ~ N(X beta, sigma2 I)
-      beta ~ prior (non-conjugate allowed; handled by log_prior_beta)
+      beta ~ prior (possibly non-conjugate; handled via log_prior_beta)
       sigma2 ~ Inv-Gamma(a0,b0)
 
-    Parameters
-    ----------
-    burn_in : int or float
-        If int: number of initial iterations discarded.
-        If float in (0,1): fraction of n_draws discarded.
-    thinning : int
-        Keep every `thinning`-th draw after burn-in.
-    progress : bool
-        Print progress logs.
-    progress_every : int or None
-        Log every this many iterations. If 0/None -> no logs.
-    show_time : bool
-        If logging, also show time per block and ETA.
-    return_info : bool
-        If True, returns (beta_post, sigma_post, acc_rate, info_dict).
-        Otherwise returns (beta_post, sigma_post, acc_rate).
-
-    Returns
-    -------
-    beta_post : (n_kept, p)
-    sigma_post: (n_kept,)
-    acc_rate  : float
-    info_dict : dict (optional)
+    Returns:
+      beta_post : (n_kept, p)
+      sigma_post: (n_kept,)
+      acc_rate  : MH acceptance rate for slope proposals
+      info_dict : optional diagnostics
     """
     rng = np.random.default_rng(seed)
     X = np.asarray(X)
@@ -155,24 +151,35 @@ def MCMC_LM_beta_nonconj_sigma_conj(
     if thinning <= 0:
         raise ValueError("thinning must be a positive integer.")
 
-    # Precompute proposal covariance base: Sigma_base = inv(X'X + ridge I)
-    XtX = X.T @ X
-    Sigma_base = np.linalg.inv(XtX + ridge * np.eye(p))
-    L_base = np.linalg.cholesky(Sigma_base)
+    # ---- Split intercept vs slopes ----
+    if intercept_idx != 0:
+        raise ValueError("This implementation assumes intercept_idx=0 and X[:,0] are ones.")
+    if not np.allclose(X[:, 0], 1.0):
+        raise ValueError("Expected X[:,0] to be a column of ones (intercept).")
 
-    # Init
+    Xs = X[:, 1:]          # slopes design
+    ps = p - 1             # number of slopes
+
+    # ---- Proposal covariance for slopes only ----
+    # Sigma_s = inv(Xs'Xs + ridge I)
+    XtX_s = Xs.T @ Xs
+    Sigma_s = np.linalg.inv(XtX_s + ridge * np.eye(ps))
+    L_s = np.linalg.cholesky(Sigma_s)
+
+    # ---- Init ----
     beta = np.zeros(p) if beta_init is None else np.asarray(beta_init).copy()
     if beta.shape[0] != p:
         raise ValueError(f"beta_init must have length p={p}. Got {beta.shape[0]}.")
+
     sigma2 = float(sigma2_init)
     if sigma2 <= 0:
         raise ValueError("sigma2_init must be > 0.")
 
-    # Residual bookkeeping
+    # Residual bookkeeping: r = y - (beta0*1 + Xs @ beta_s)
     r = y - X @ beta
     rss = float(r @ r)
 
-    # Likelihood cache
+    # Likelihood cache (up to constants)
     def log_lik_from_rss(rss_val, sigma2_val):
         return -0.5 * rss_val / sigma2_val - 0.5 * n * np.log(sigma2_val)
 
@@ -183,36 +190,47 @@ def MCMC_LM_beta_nonconj_sigma_conj(
     kept_beta = []
     kept_sig = []
 
-    # Acceptance counting
+    # Acceptance counting (for slope MH)
     acc = 0
+    acc_block = 0
+
+    # Adaptation state (log-scale for positivity)
+    log_scale = np.log(float(proposal_scale))
+    n_adapt = 0
+    scale_path = []
 
     # Progress timing
     t0 = time.perf_counter()
     last_t = t0
     last_i = 0
 
-    # To report acceptance over blocks
-    acc_block = 0
-
     def _should_log(i):
         return bool(progress) and (progress_every not in (None, 0)) and ((i + 1) % int(progress_every) == 0)
 
     for t in range(n_draws):
-        #  MH step for beta | sigma2, y 
-        z = rng.standard_normal(p)
-        beta_prop = beta + proposal_scale * (np.sqrt(sigma2) * (L_base @ z))
+        proposal_scale_t = float(np.exp(log_scale))
 
-        delta = beta_prop - beta
-        r_prop = r - X @ delta
+        # =========================================================
+        #  MH step for slopes beta[1:] | beta0, sigma2, y
+        # =========================================================
+        z = rng.standard_normal(ps)
+        beta_s = beta[1:]
+        beta_s_prop = beta_s + proposal_scale_t * (np.sqrt(sigma2) * (L_s @ z))
+
+        delta_s = beta_s_prop - beta_s
+        r_prop = r - Xs @ delta_s
         rss_prop = float(r_prop @ r_prop)
+
+        beta_prop = beta.copy()
+        beta_prop[1:] = beta_s_prop
 
         lp_beta_prop = log_prior_beta(beta_prop, prior, prior_kwargs, intercept_idx=intercept_idx)
         ll_prop = log_lik_from_rss(rss_prop, sigma2)
 
         log_alpha = (lp_beta_prop + ll_prop) - (lp_beta + ll)
 
-        if np.log(rng.random()) < log_alpha:
-            beta = beta_prop
+        if np.isfinite(log_alpha) and (np.log(rng.random()) < log_alpha):
+            beta[1:] = beta_s_prop
             r = r_prop
             rss = rss_prop
             lp_beta = lp_beta_prop
@@ -220,7 +238,25 @@ def MCMC_LM_beta_nonconj_sigma_conj(
             acc += 1
             acc_block += 1
 
-        #  Gibbs step for sigma2 | beta, y ---
+        # =========================================================
+        # Gibbs step for intercept beta0 | slopes, sigma2, y
+        #    Flat prior on intercept:
+        #      beta0 | rest ~ N(mean(y - Xs beta_s), sigma2/n)
+        # =========================================================
+        beta0_old = beta[0]
+        u = r + beta0_old              # u = y - Xs beta_s
+        m_int = float(u.mean())
+        v_int = sigma2 / n
+        beta0_new = m_int + np.sqrt(v_int) * rng.standard_normal()
+
+        beta[0] = beta0_new
+        r = r - (beta0_new - beta0_old)
+        rss = float(r @ r)
+        ll = log_lik_from_rss(rss, sigma2)  # update (sigma2 unchanged yet)
+
+        # =========================================================
+        # Gibbs step for sigma2 | beta, y  (Inv-Gamma)
+        # =========================================================
         an = a0 + 0.5 * n
         bn = b0 + 0.5 * rss
         sigma2 = invgamma.rvs(a=an, scale=bn, random_state=rng)
@@ -228,12 +264,34 @@ def MCMC_LM_beta_nonconj_sigma_conj(
         # Update ll cache after sigma2 changes
         ll = log_lik_from_rss(rss, sigma2)
 
-        #  store ---
+        # =========================================================
+        # Adapt proposal_scale during burn-in only
+        # =========================================================
+        if adapt and (t < burn_in_int) and (t + 1 >= adapt_start) and ((t + 1) % adapt_every == 0):
+            acc_rate_block = acc_block / adapt_every
+
+            n_adapt += 1
+            step = adapt_gain / np.sqrt(n_adapt)
+
+            log_scale = log_scale + step * (acc_rate_block - target_accept)
+
+            new_scale = float(np.exp(log_scale))
+            new_scale = min(adapt_max_scale, max(adapt_min_scale, new_scale))
+            log_scale = np.log(new_scale)
+
+            scale_path.append(new_scale)
+            acc_block = 0  # reset after adaptation
+
+        # =========================================================
+        # Store
+        # =========================================================
         if t >= burn_in_int and ((t - burn_in_int) % thinning == 0):
             kept_beta.append(beta.copy())
-            kept_sig.append(sigma2)
+            kept_sig.append(float(sigma2))
 
-        #  logs ---
+        # =========================================================
+        # Logs
+        # =========================================================
         if _should_log(t):
             now = time.perf_counter()
             block_time = now - last_t
@@ -241,12 +299,11 @@ def MCMC_LM_beta_nonconj_sigma_conj(
             it_s = block_iters / block_time if block_time > 0 else np.nan
 
             acc_rate_total = acc / (t + 1)
-            acc_rate_block = acc_block / block_iters if block_iters > 0 else np.nan
-
             msg = (
                 f"[{t+1:>7}/{n_draws}] "
-                f"acc_total={acc_rate_total:.3f} acc_block={acc_rate_block:.3f} "
-                f"sigma2={sigma2:.4g}")
+                f"acc_total={acc_rate_total:.3f} "
+                f"sigma2={sigma2:.4g} "
+                f"prop_scale={float(np.exp(log_scale)):.3g}")
 
             if show_time:
                 remaining = n_draws - (t + 1)
@@ -254,10 +311,8 @@ def MCMC_LM_beta_nonconj_sigma_conj(
                 msg += f" | {it_s:,.1f} it/s | block={block_time:.2f}s | ETA≈{eta/60:.1f} min"
 
             print(msg)
-
             last_t = now
             last_i = t + 1
-            acc_block = 0  # reset
 
     beta_post = np.vstack(kept_beta) if kept_beta else np.empty((0, p))
     sigma_post = np.array(kept_sig) if kept_sig else np.empty((0,))
@@ -268,12 +323,17 @@ def MCMC_LM_beta_nonconj_sigma_conj(
         "burn_in": burn_in_int,
         "thinning": thinning,
         "n_kept": beta_post.shape[0],
-        "acc_rate": acc_rate,
-        "proposal_scale": proposal_scale,
+        "acc_rate_slopes": acc_rate,
+        "final_proposal_scale": float(np.exp(log_scale)),
+        "proposal_scale_path": np.array(scale_path) if scale_path else None,
         "ridge": ridge,
         "prior": prior,
         "seed": seed,
-        "runtime_sec": time.perf_counter() - t0}
+        "runtime_sec": time.perf_counter() - t0,
+        "adapt": adapt,
+        "target_accept": target_accept,
+        "adapt_every": adapt_every,
+        "adapt_start": adapt_start}
 
     if return_info:
         return beta_post, sigma_post, acc_rate, info

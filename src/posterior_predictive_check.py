@@ -74,7 +74,9 @@ def plot_ppc_density_y(
     legend_loc="upper right",
     show=True,
     savepath=None,
-    dpi=200,):
+    dpi=200,
+    obs_transform=None,
+    rep_transform=None,):
 
     """
     Posterior Predictive Check (density) for y: compare posterior predictive draws vs observed y.
@@ -86,6 +88,7 @@ def plot_ppc_density_y(
     Notes:
       - y_rep is flattened across samples.
       - HDI is computed over y_rep draws.
+      - obs_transform / rep_transform can align scales (e.g., np.log for observed y).
     """
     if y is None:
         raise ValueError("You must provide observed y.")
@@ -108,13 +111,25 @@ def plot_ppc_density_y(
     else:
         y_rep_vals = np.asarray(y_rep).ravel()
 
+    if obs_transform is not None:
+        obs_vals = np.asarray(obs_transform(obs_vals)).ravel()
+    if rep_transform is not None:
+        y_rep_vals = np.asarray(rep_transform(y_rep_vals)).ravel()
+
+    if not np.isfinite(obs_vals).all():
+        raise ValueError("Observed y contains non-finite values after transform.")
+    if not np.isfinite(y_rep_vals).all():
+        raise ValueError("y_rep contains non-finite values after transform.")
+
     if y_rep_vals.size == 0:
         raise ValueError("y_rep is empty after flattening.")
     if obs_vals.size == 0:
         raise ValueError("Observed y is empty after flattening.")
 
+    lo, hi = min(obs_vals.min(), y_rep_vals.min()), max(obs_vals.max(), y_rep_vals.max())
+
     # KDE over y_rep
-    xs = np.linspace(obs_vals.min(), obs_vals.max(), kde_points)
+    xs = np.linspace(lo, hi, kde_points)
     kde_vals = None
     if show_kde:
         kde = gaussian_kde(y_rep_vals)
@@ -162,7 +177,6 @@ def plot_ppc_density_y(
         label=f"HDI {int(hdi_prob*100)}%",)
 
 
-    lo, hi = obs_vals.min(), obs_vals.max()
     ax.set_xlim(lo * xlim_pad[0], hi * xlim_pad[1])
 
     if title is None:
@@ -206,7 +220,8 @@ def plot_ppc_residuals(
     legend_loc="upper right",
     show=True,
     savepath=None,
-    dpi=200):
+    dpi=200,
+    y_transform=None):
 
     """
     PPC for residuals in a Bayesian linear regression.
@@ -224,6 +239,10 @@ def plot_ppc_residuals(
     """
     X = np.asarray(X)
     y = np.asarray(y).ravel()
+    if y_transform is not None:
+        y = np.asarray(y_transform(y)).ravel()
+        if not np.isfinite(y).all():
+            raise ValueError("Observed y contains non-finite values after transform.")
     n = y.size
     if X.shape[0] != n:
         raise ValueError(f"X has {X.shape[0]} rows but y has length {n}.")
