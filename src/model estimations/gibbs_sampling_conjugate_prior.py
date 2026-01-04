@@ -31,7 +31,7 @@ def Gibbs_Sampling(m0, V0, a0, b0, n, p, X, y, n_draws, burn_in=0, thinning=1, s
     for i in range(n_draws):
         #Posterior precision & mean for beta | sigma2, y
         Vn = np.linalg.inv(XtX + V0_inv)           # p×p
-        mn = Vn @ (Xty + V0_inv @ m0)               # p-vector
+        mn = Vn @ (Xty + V0_inv @ m0)              # p-vector
 
         #Sample beta using Cholesky for stability
         L = np.linalg.cholesky(sigma2 * Vn)         # lower-triangular
