@@ -17,6 +17,7 @@ A professional, from-scratch implementation of Bayesian linear regression. The d
 - [Posterior analysis utilities](#posterior-analysis-utilities)
 - [Log-scale modeling and sigma2 calibration](#log-scale-modeling-and-sigma2-calibration)
 - [How to run (Python snippets)](#how-to-run-python-snippets)
+- [CLI scripts](#cli-scripts)
 - [Notebooks](#notebooks)
 - [Quick start](#quick-start)
 - [Testing](#testing)
@@ -59,6 +60,7 @@ $\alpha = \min\left(1, \frac{p(y \mid \beta') p(\beta')}{p(y \mid \beta) p(\beta
 
 - Conjugate Bayesian linear regression with optimized Gibbs updates.
 - Metropolis-Hastings updates for non-conjugate priors on $\beta$.
+- Full MH for $\beta$ and $\sigma^2$ with non-conjugate priors and adaptive covariance.
 - Diagnostics: trace plots, ACF, ESS, R-hat, posterior summaries.
 - Posterior predictive checks: density/KDE, HDI shading, and residual checks.
 - Extensions: log-scale modeling, heavier tails, mixtures, heteroskedasticity (as separate experiments).
@@ -150,7 +152,7 @@ idata = build_idata_from_chains(
 Non-conjugate slopes (MH) + conjugate sigma2:
 
 ```python
-from src.model_estimations.sampler_mh_conjugate_variance import MCMC_LM_beta_nonconj_sigma_conj
+from src.model_estimations.metropolis_conjugate_variance import MCMC_LM_beta_nonconj_sigma_conj
 
 beta_post, sigma_post, acc, info = MCMC_LM_beta_nonconj_sigma_conj(
     X_design, y,
@@ -195,10 +197,31 @@ idata_ppc = attach_posterior_predictive_y(idata, X_design, seed=123, var_name="y
 plot_ppc_density_y(idata=idata_ppc, y=y, var_name="y")
 ```
 
+## CLI scripts
+
+All CLI entry points live in `SCRIPTS/` and save `posterior.npz` + `metadata.json`.
+
+Examples:
+
+```bash
+python3 SCRIPTS/run_gibbs_conjugate.py --data data/df_clean.csv --output-dir outputs/gibbs
+python3 SCRIPTS/run_mh_conjugate.py --data data/df_clean.csv --output-dir outputs/mh_conjugate
+python3 SCRIPTS/run_mh_adaptive.py --data data/df_clean.csv --output-dir outputs/mh_adaptive
+python3 SCRIPTS/run_full_mh.py --data data/df_clean.csv --output-dir outputs/full_mh
+python3 SCRIPTS/run_inference.py --posterior outputs/full_mh/posterior.npz --data data/df_clean.csv --ppc
+```
+
+Notes:
+
+- `--features` expects a comma-separated list like `cost,LSAT,GPA,age,llibvol,lcost,rank`.
+- `--prior-kwargs` and `--sigma2-prior-kwargs` accept JSON or `@path/to/file.json`.
+
 ## Notebooks
 
 - `notebooks/Linear_Regression.ipynb` - conjugate baseline and diagnostics
+- `notebooks/model_train.ipynb` - conjugate pipeline and posterior analysis
 - `notebooks/model_train_no_conjugate.ipynb` - MH for slopes, conjugate sigma2, log-scale variants
+- `notebooks/model_train_full_mh.ipynb` - full MH for beta and sigma2 (non-conjugate)
 
 ## Quick start
 
@@ -224,6 +247,7 @@ docker run -it --rm -v "$(pwd)":/app bayesian-lr bash
 ## Repository layout
 
 - `src/` - samplers, diagnostics, PPC utilities
+- `SCRIPTS/` - CLI entry points for running samplers and inference
 - `notebooks/` - analysis notebooks
 - `data/` - toy datasets
 - `experiments/` - extensions and variants
