@@ -204,11 +204,11 @@ All CLI entry points live in `SCRIPTS/` and save `posterior.npz` + `metadata.jso
 Examples:
 
 ```bash
-python3 SCRIPTS/run_gibbs_conjugate.py --data data/df_clean.csv --output-dir outputs/gibbs
-python3 SCRIPTS/run_mh_conjugate.py --data data/df_clean.csv --output-dir outputs/mh_conjugate
-python3 SCRIPTS/run_mh_adaptive.py --data data/df_clean.csv --output-dir outputs/mh_adaptive
-python3 SCRIPTS/run_full_mh.py --data data/df_clean.csv --output-dir outputs/full_mh
-python3 SCRIPTS/run_inference.py --posterior outputs/full_mh/posterior.npz --data data/df_clean.csv --ppc
+python3 scripts/run_gibbs_conjugate.py --data data/df_clean.csv --output-dir outputs/gibbs
+python3 scripts/run_mh_conjugate.py --data data/df_clean.csv --output-dir outputs/mh_conjugate
+python3 scripts/run_mh_adaptive.py --data data/df_clean.csv --output-dir outputs/mh_adaptive
+python3 scripts/run_full_mh.py --data data/df_clean.csv --output-dir outputs/full_mh
+python3 scripts/run_inference.py --posterior outputs/full_mh/posterior.npz --data data/df_clean.csv --ppc
 ```
 
 Notes:
