@@ -263,4 +263,4 @@ docker run -it --rm -v "$(pwd)":/app bayesian-lr bash
 
 ## License
 
-MIT License
+This project is licensed under the **MIT License** — you are free to use, modify, and distribute this code, provided that appropriate credit is given to the author.
